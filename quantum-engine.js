@@ -32,7 +32,7 @@ class QuantumArbitrageEngine extends EventEmitter {
             alchemyApiKey: process.env.ALCHEMY_API_KEY,
             minProfitUSD: parseFloat(process.env.MIN_PROFIT_USD) || 15,
             maxPositionUSD: parseFloat(process.env.MAX_POSITION_USD) || 100000,
-            scanInterval: 50,
+            scanInterval: 1000, // Increased from 50ms to 1000ms to reduce API calls
             mevProtection: true,
             sandwichDetection: true,
             frontrunProtection: true,
@@ -49,6 +49,12 @@ class QuantumArbitrageEngine extends EventEmitter {
             new ethers.JsonRpcProvider('https://developer-access-mainnet.base.org')
         ];
         this.provider = this.providers[0];
+        
+        // Validate private key
+        if (!this.config.privateKey) {
+            throw new Error('PRIVATE_KEY environment variable is required');
+        }
+        
         this.wallet = new ethers.Wallet(this.config.privateKey, this.provider);
 
         // Advanced token registry
@@ -232,9 +238,13 @@ class QuantumArbitrageEngine extends EventEmitter {
                     const amountOut = amounts[1];
                     
                     // Determine the token pair from the call index
-                    const callIndex = index % this.quantumPairs.length;
-                    const pair = this.quantumPairs[callIndex];
+                    const pairIndex = Math.floor(index / this.dexRouters.size);
+                    if (pairIndex >= this.quantumPairs.length) return;
+                    
+                    const pair = this.quantumPairs[pairIndex];
                     const tokenBInfo = Array.from(this.tokens.values()).find(t => t.addr === pair.b);
+                    
+                    if (!tokenBInfo) return;
                     
                     const price = parseFloat(ethers.formatUnits(amountOut, tokenBInfo.decimals));
 
@@ -366,6 +376,11 @@ class QuantumArbitrageEngine extends EventEmitter {
     extractPriceFromSwap(event) {
         // Advanced swap event decoder for AMM DEXes
         try {
+            // Check if we have enough topics
+            if (!event.topics || event.topics.length < 3) {
+                return null;
+            }
+
             // Decode the event data for amount0 and amount1
             const [amount0, amount1] = ethers.AbiCoder.defaultAbiCoder().decode(
                 ['uint256', 'uint256'],
@@ -536,6 +551,11 @@ class QuantumArbitrageEngine extends EventEmitter {
             const tokenAInfo = Array.from(this.tokens.values()).find(t => t.addr === tokenA);
             const tokenBInfo = Array.from(this.tokens.values()).find(t => t.addr === tokenB);
 
+            if (!tokenAInfo || !tokenBInfo) {
+                tconsole.error(`Token info not found for ${tokenA} or ${tokenB}`);
+                return 0;
+            }
+
             // Use getAmountsOut for all DEXes
             const router = new ethers.Contract(dex.router, [
                 "function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts)"
@@ -560,6 +580,9 @@ class QuantumArbitrageEngine extends EventEmitter {
         const sellDex = priceVector[priceVector.length - 1];
 
         if (buyDex.dex === sellDex.dex) return null;
+        
+        // Add check for zero price to avoid division by zero
+        if (buyDex.price <= 0) return null;
 
         const spread = sellDex.price - buyDex.price;
         const profitPercent = (spread / buyDex.price) * 100;
@@ -776,49 +799,65 @@ class QuantumArbitrageEngine extends EventEmitter {
     }
 
     async generateSwapCalldata(dexName, tokenIn, tokenOut, exactInput, amountInUSD) {
-        const dex = this.dexRouters.get(dexName);
-        const iface = new ethers.Interface([]);
-        let callData = '0x';
+        try {
+            const dex = this.dexRouters.get(dexName);
+            const iface = new ethers.Interface([]);
+            let callData = '0x';
 
-        // For AMM-based DEXes, use swapExactTokensForTokens
-        iface.setFunction("function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)");
-        
-        let amountIn = ethers.MaxUint256;
-        if (exactInput && amountInUSD > 0) {
-            const tokenInfo = Array.from(this.tokens.values()).find(t => t.addr === tokenIn);
-            const price = this.priceMatrix.get(`${dexName}_${tokenIn}_${tokenOut}`)?.price || 1;
-            const amount = amountInUSD / price;
-            amountIn = ethers.parseUnits(amount.toFixed(tokenInfo.decimals), tokenInfo.decimals);
+            // For AMM-based DEXes, use swapExactTokensForTokens
+            iface.setFunction("function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)");
+            
+            let amountIn = ethers.MaxUint256;
+            if (exactInput && amountInUSD > 0) {
+                const tokenInfo = Array.from(this.tokens.values()).find(t => t.addr === tokenIn);
+                if (!tokenInfo) {
+                    tconsole.error(`Token info not found for: ${tokenIn}`);
+                    return '0x';
+                }
+                
+                const price = this.priceMatrix.get(`${dexName}_${tokenIn}_${tokenOut}`)?.price || 1;
+                const amount = amountInUSD / price;
+                amountIn = ethers.parseUnits(amount.toFixed(tokenInfo.decimals), tokenInfo.decimals);
+            }
+
+            const path = [tokenIn, tokenOut];
+            const amountOutMin = 1; // Minimum amount out
+            const to = this.config.contractAddress;
+            const deadline = Math.floor(Date.now() / 1000) + 300;
+
+            callData = iface.encodeFunctionData('swapExactTokensForTokens', [
+                amountIn,
+                amountOutMin,
+                path,
+                to,
+                deadline
+            ]);
+
+            return callData;
+        } catch (error) {
+            tconsole.error(`Error generating swap calldata for ${dexName}:`, error.message);
+            return '0x';
         }
-
-        const path = [tokenIn, tokenOut];
-        const amountOutMin = 1; // Minimum amount out (will be calculated properly in real implementation)
-        const to = this.config.contractAddress;
-        const deadline = Math.floor(Date.now() / 1000) + 300;
-
-        callData = iface.encodeFunctionData('swapExactTokensForTokens', [
-            amountIn,
-            amountOutMin,
-            path,
-            to,
-            deadline
-        ]);
-
-        return callData;
     }
 
     async calculateQuantumGasPrice(opportunity) {
-        const baseFee = await this.provider.getFeeData();
-        const currentGas = baseFee.gasPrice || ethers.parseUnits('2', 'gwei');
+        try {
+            const feeData = await this.provider.getFeeData();
+            // Use baseFeePerGas as fallback if gasPrice is null
+            const gasPrice = feeData.gasPrice || feeData.lastBaseFeePerGas || ethers.parseUnits('2', 'gwei');
+            
+            const profitMultiplier = Math.min(2.0, opportunity.netProfit / 25);
+            const confidenceMultiplier = opportunity.confidence > 0.8 ? 1.3 : 1.1;
+            const urgencyMultiplier = 1.2;
 
-        const profitMultiplier = Math.min(2.0, opportunity.netProfit / 25);
-        const confidenceMultiplier = opportunity.confidence > 0.8 ? 1.3 : 1.1;
-        const urgencyMultiplier = 1.2;
+            const optimalGas = gasPrice * BigInt(Math.floor(profitMultiplier * confidenceMultiplier * urgencyMultiplier * 100)) / BigInt(100);
+            const maxGas = ethers.parseUnits(this.config.maxGasPriceGwei.toString(), 'gwei');
 
-        const optimalGas = currentGas * BigInt(Math.floor(profitMultiplier * confidenceMultiplier * urgencyMultiplier * 100)) / BigInt(100);
-        const maxGas = ethers.parseUnits(this.config.maxGasPriceGwei.toString(), 'gwei');
-
-        return optimalGas > maxGas ? maxGas : optimalGas;
+            return optimalGas > maxGas ? maxGas : optimalGas;
+        } catch (error) {
+            tconsole.error('Error calculating gas price:', error.message);
+            return ethers.parseUnits(this.config.maxGasPriceGwei.toString(), 'gwei');
+        }
     }
 
     async getOptimalNonce() {
@@ -904,8 +943,10 @@ class QuantumArbitrageEngine extends EventEmitter {
     async updateGasOracle() {
         try {
             const feeData = await this.provider.getFeeData();
-            if (feeData.gasPrice) {
-                const newGas = parseFloat(ethers.formatUnits(feeData.gasPrice, 'gwei'));
+            // Use baseFeePerGas as fallback if gasPrice is null
+            const gasPrice = feeData.gasPrice || feeData.lastBaseFeePerGas || ethers.parseUnits('2', 'gwei');
+            if (gasPrice) {
+                const newGas = parseFloat(ethers.formatUnits(gasPrice, 'gwei'));
                 this.gasOracle.trend = newGas > this.gasOracle.current ? 'rising' : 'falling';
                 this.gasOracle.current = newGas;
                 this.gasOracle.optimal = newGas * 1.1;
