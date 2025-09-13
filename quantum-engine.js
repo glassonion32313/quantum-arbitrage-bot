@@ -63,33 +63,27 @@ class QuantumArbitrageEngine extends EventEmitter {
             ['DEGEN', { addr: '0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed', decimals: 18, tier: 3, avgLiquidity: 8000000 }]
         ]);
 
-        // Neural DEX routing
+        // Neural DEX routing (Uniswap V3 removed)
         this.dexRouters = new Map([
-            ['UNISWAP_V3', { 
-                router: '0x2626664c2603336E57B271c5C0b26F421741e481',
-                quoter: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
-                factory: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
-                gasBase: 180000, fees: [100, 500, 3000, 10000], priority: 1 
-            }],
             ['AERODROME', { 
                 router: '0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43',
                 factory: '0x420DD381b31aEf6683db6B902084cB0FFECe40Da',
-                gasBase: 160000, priority: 2 
+                gasBase: 160000, priority: 1 
             }],
             ['BASESWAP', { 
                 router: '0x327Df1E6de05895d2ab08513aaDD9313Fe505d86',
                 factory: '0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB',
-                gasBase: 140000, priority: 3 
+                gasBase: 140000, priority: 2 
             }],
             ['SUSHISWAP', { 
                 router: '0x6BDED42c6DA8FBf0d2bA55B2fa120C5e0c8D7891',
                 factory: '0x71524B4f93c58fcbF659783284E38825f0622859',
-                gasBase: 150000, priority: 4 
+                gasBase: 150000, priority: 3 
             }],
             ['PANCAKESWAP', { 
                 router: '0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb',
                 factory: '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865',
-                gasBase: 155000, priority: 5 
+                gasBase: 155000, priority: 4 
             }]
         ]);
 
@@ -196,24 +190,20 @@ class QuantumArbitrageEngine extends EventEmitter {
 
         for (const pair of this.quantumPairs) {
             for (const [dexName, dex] of this.dexRouters) {
-                if (dex.quoter) {
-                    const iface = new ethers.Interface(["function quoteExactInputSingle(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96)) external view returns (uint256)"]);
-                    const tokenA = Array.from(this.tokens.values()).find(t => t.addr === pair.a);
-
-                    for (const fee of dex.fees || [3000]) {
-                        calls.push({
-                            target: dex.quoter,
-                            allowFailure: true,
-                            callData: iface.encodeFunctionData('quoteExactInputSingle', [{
-                                tokenIn: pair.a,
-                                tokenOut: pair.b,
-                                amountIn: ethers.parseUnits('1', tokenA.decimals),
-                                fee,
-                                sqrtPriceLimitX96: 0
-                            }])
-                        });
-                    }
-                }
+                // Use getAmountsOut for all DEXes
+                const routerInterface = new ethers.Interface([
+                    "function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts)"
+                ]);
+                
+                const tokenA = Array.from(this.tokens.values()).find(t => t.addr === pair.a);
+                const amountIn = ethers.parseUnits('1', tokenA.decimals);
+                const path = [pair.a, pair.b];
+                
+                calls.push({
+                    target: dex.router,
+                    allowFailure: true,
+                    callData: routerInterface.encodeFunctionData('getAmountsOut', [amountIn, path])
+                });
             }
         }
 
@@ -231,12 +221,22 @@ class QuantumArbitrageEngine extends EventEmitter {
 
     processQuantumPriceResults(results, calls) {
         let priceCount = 0;
+        const routerInterface = new ethers.Interface([
+            "function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts)"
+        ]);
 
         results.forEach((result, index) => {
             if (result.success && result.returnData !== '0x') {
                 try {
-                    const [amountOut] = ethers.AbiCoder.defaultAbiCoder().decode(['uint256'], result.returnData);
-                    const price = parseFloat(ethers.formatUnits(amountOut, 6));
+                    const [amounts] = routerInterface.decodeFunctionResult('getAmountsOut', result.returnData);
+                    const amountOut = amounts[1];
+                    
+                    // Determine the token pair from the call index
+                    const callIndex = index % this.quantumPairs.length;
+                    const pair = this.quantumPairs[callIndex];
+                    const tokenBInfo = Array.from(this.tokens.values()).find(t => t.addr === pair.b);
+                    
+                    const price = parseFloat(ethers.formatUnits(amountOut, tokenBInfo.decimals));
 
                     if (price > 0) {
                         const key = `price_${index}`;
@@ -299,9 +299,8 @@ class QuantumArbitrageEngine extends EventEmitter {
     }
 
     subscribeToQuantumEvents(ws) {
-        // Subscribe to all major DEX swap events
+        // Subscribe to all major DEX swap events (Uniswap V3 removed)
         const swapTopics = [
-            '0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67', // Uniswap V3
             '0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822', // Aerodrome
             '0x1c411e9a96e071241c2f21f7726b17ae89e3cab4c78be50e062b03a9fffbbad1'  // BaseSwap
         ];
@@ -365,14 +364,14 @@ class QuantumArbitrageEngine extends EventEmitter {
     }
 
     extractPriceFromSwap(event) {
-        // Advanced swap event decoder
+        // Advanced swap event decoder for AMM DEXes
         try {
-            const decoded = ethers.AbiCoder.defaultAbiCoder().decode(
-                ['int256', 'int256', 'uint160', 'uint128', 'int24'],
+            // Decode the event data for amount0 and amount1
+            const [amount0, amount1] = ethers.AbiCoder.defaultAbiCoder().decode(
+                ['uint256', 'uint256'],
                 event.data
             );
 
-            const [amount0, amount1, sqrtPriceX96] = decoded;
             if (amount0 !== 0n && amount1 !== 0n) {
                 const price = Math.abs(Number(amount1)) / Math.abs(Number(amount0));
                 const volume = Math.abs(Number(amount0)) + Math.abs(Number(amount1));
@@ -529,26 +528,18 @@ class QuantumArbitrageEngine extends EventEmitter {
         try {
             const dex = this.dexRouters.get(dexName);
             const tokenAInfo = Array.from(this.tokens.values()).find(t => t.addr === tokenA);
+            const tokenBInfo = Array.from(this.tokens.values()).find(t => t.addr === tokenB);
 
-            if (dexName === 'UNISWAP_V3' && dex.quoter) {
-                const quoter = new ethers.Contract(dex.quoter, [
-                    "function quoteExactInputSingle(tuple(address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96)) external view returns (uint256)"
-                ], this.provider);
+            // Use getAmountsOut for all DEXes
+            const router = new ethers.Contract(dex.router, [
+                "function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts)"
+            ], this.provider);
 
-                const amountIn = ethers.parseUnits('1', tokenAInfo.decimals);
-                const quote = await quoter.quoteExactInputSingle.staticCall({
-                    tokenIn: tokenA,
-                    tokenOut: tokenB,
-                    amountIn,
-                    fee: 3000,
-                    sqrtPriceLimitX96: 0
-                });
-
-                const tokenBInfo = Array.from(this.tokens.values()).find(t => t.addr === tokenB);
-                return parseFloat(ethers.formatUnits(quote, tokenBInfo.decimals));
-            }
-
-            return 0;
+            const amountIn = ethers.parseUnits('1', tokenAInfo.decimals);
+            const path = [tokenA, tokenB];
+            const amounts = await router.getAmountsOut.staticCall(amountIn, path);
+            
+            return parseFloat(ethers.formatUnits(amounts[1], tokenBInfo.decimals));
         } catch (error) {
             return 0;
         }
@@ -780,35 +771,34 @@ class QuantumArbitrageEngine extends EventEmitter {
 
     async generateSwapCalldata(dexName, tokenIn, tokenOut, exactInput, amountInUSD) {
         const dex = this.dexRouters.get(dexName);
+        const iface = new ethers.Interface([]);
+        let callData = '0x';
 
-        if (dexName === 'UNISWAP_V3') {
-            const iface = new ethers.Interface([
-                "function exactInputSingle(tuple(address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) external returns (uint256)"
-            ]);
-
-            let amountIn = ethers.MaxUint256;
-            if (exactInput && amountInUSD > 0) {
-                const tokenInfo = Array.from(this.tokens.values()).find(t => t.addr === tokenIn);
-                const price = this.priceMatrix.get(`${dexName}_${tokenIn}_${tokenOut}`)?.price || 1;
-                const amount = amountInUSD / price;
-                amountIn = ethers.parseUnits(amount.toFixed(tokenInfo.decimals), tokenInfo.decimals);
-            }
-
-            const params = {
-                tokenIn: tokenIn,
-                tokenOut: tokenOut,
-                fee: 3000,
-                recipient: this.config.contractAddress,
-                deadline: Math.floor(Date.now() / 1000) + 300,
-                amountIn: amountIn,
-                amountOutMinimum: 0,
-                sqrtPriceLimitX96: 0
-            };
-
-            return iface.encodeFunctionData('exactInputSingle', [params]);
+        // For AMM-based DEXes, use swapExactTokensForTokens
+        iface.setFunction("function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)");
+        
+        let amountIn = ethers.MaxUint256;
+        if (exactInput && amountInUSD > 0) {
+            const tokenInfo = Array.from(this.tokens.values()).find(t => t.addr === tokenIn);
+            const price = this.priceMatrix.get(`${dexName}_${tokenIn}_${tokenOut}`)?.price || 1;
+            const amount = amountInUSD / price;
+            amountIn = ethers.parseUnits(amount.toFixed(tokenInfo.decimals), tokenInfo.decimals);
         }
 
-        throw new Error(`Quantum error: Unsupported DEX ${dexName}`);
+        const path = [tokenIn, tokenOut];
+        const amountOutMin = 1; // Minimum amount out (will be calculated properly in real implementation)
+        const to = this.config.contractAddress;
+        const deadline = Math.floor(Date.now() / 1000) + 300;
+
+        callData = iface.encodeFunctionData('swapExactTokensForTokens', [
+            amountIn,
+            amountOutMin,
+            path,
+            to,
+            deadline
+        ]);
+
+        return callData;
     }
 
     async calculateQuantumGasPrice(opportunity) {
@@ -929,7 +919,7 @@ class QuantumArbitrageEngine extends EventEmitter {
             const usdcAddr = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
             
             // Check if we have a recent price in our matrix
-            const cacheKey = `UNISWAP_V3_${wethAddr}_${usdcAddr}`;
+            const cacheKey = `AERODROME_${wethAddr}_${usdcAddr}`;
             const cached = this.priceMatrix.get(cacheKey);
             
             if (cached && Date.now() - cached.timestamp < 30000) { // 30 second cache
@@ -938,7 +928,7 @@ class QuantumArbitrageEngine extends EventEmitter {
             }
             
             // Fetch fresh price if not in cache
-            const freshPrice = await this.fetchQuantumPrice('UNISWAP_V3', wethAddr, usdcAddr);
+            const freshPrice = await this.fetchQuantumPrice('AERODROME', wethAddr, usdcAddr);
             if (freshPrice > 0) {
                 this.ethPrice = freshPrice;
                 this.priceMatrix.set(cacheKey, {
@@ -983,7 +973,7 @@ class QuantumArbitrageEngine extends EventEmitter {
             '╔══════════════════════════════════════════════════════════════╗',
             '║                 QUANTUM ARBITRAGE ENGINE v4.0               ║',
             '╠══════════════════════════════════════════════════════════════╣',
-            `║ Status:    ${this.getStatusIndicator()}                                  ║`,
+            `║ Status:    ${this.getStatusIndicator()}                                  ║',
             `║ ETH:       ${ethers.formatEther(this.walletBalance || 0).substring(0, 8)} ETH ($${(Number(ethers.formatEther(this.walletBalance || 0)) * this.ethPrice).toFixed(2)})         ║`,
             `║ Gas:       ${this.gasOracle.current.toFixed(1)} gwei (${this.gasOracle.trend})                      ║`,
             '╠══════════════════════════════════════════════════════════════╣',
