@@ -1,11 +1,10 @@
-// Neural MEV Arbitrage Engine v4.0 - Quantum-Scale Architecture with Balancer Flash Loans
+// Neural MEV Arbitrage Engine v4.0 - Quantum-Scale Architecture
 // Ultra-optimized for maximum alpha extraction with zero-fee flash loans
 require('dotenv').config();
 const { ethers } = require('ethers');
 const WebSocket = require('ws');
 const axios = require('axios');
 const EventEmitter = require('events');
-// Add this at the top of your file with the other imports
 const readline = require('readline');
 
 // Custom console with timestamps
@@ -14,7 +13,8 @@ class TimestampConsole {
     const timestamp = new Date().toISOString();
     console.log(`[${timestamp}]`, ...args);
   }
-    error(...args) {
+  
+  error(...args) {
     const timestamp = new Date().toISOString();
     console.error(`[${timestamp}] ERROR:`, ...args);
   }
@@ -137,6 +137,7 @@ class QuantumArbitrageEngine extends EventEmitter {
         this.totalProfit = 0;
         this.walletBalance = 0;
         this.activityLog = [];
+        this.ethPrice = 3600; // Will be updated dynamically
 
         // Advanced contract interfaces
         this.flashloanContract = new ethers.Contract(
@@ -567,7 +568,7 @@ class QuantumArbitrageEngine extends EventEmitter {
         const profitPercent = (spread / buyDex.price) * 100;
 
         const totalGas = buyDex.gasEstimate + sellDex.gasEstimate + 120000;
-        const gasCostUSD = (totalGas * this.gasOracle.current * 3600) / 1e9;
+        const gasCostUSD = (totalGas * this.gasOracle.current * this.ethPrice) / 1e9;
 
         const volatility = this.getVolatility(tokenA, tokenB);
         const optimalSize = this.calculateNeuralPosition(profitPercent, gasCostUSD, volatility);
@@ -842,7 +843,7 @@ class QuantumArbitrageEngine extends EventEmitter {
                 txHash: tx.hash,
                 gasUsed: receipt.gasUsed.toString(),
                 opportunity,
-                actualProfit: profitable ? opportunity.netProfit : -opportunity.gasEstimate * this.gasOracle.current * 3600 / 1e9
+                actualProfit: profitable ? opportunity.netProfit : -opportunity.gasEstimate * this.gasOracle.current * this.ethPrice / 1e9
             });
 
             if (profitable) {
@@ -913,8 +914,56 @@ class QuantumArbitrageEngine extends EventEmitter {
             }
             
             this.walletBalance = await this.provider.getBalance(this.wallet.address);
+            
+            // Update ETH price
+            await this.updateEthPrice();
         } catch (error) {
             tconsole.error('Error updating gas oracle:', error.message);
+        }
+    }
+    
+    async updateEthPrice() {
+        try {
+            // Try to get ETH price from WETH/USDC pair
+            const wethAddr = '0x4200000000000000000000000000000000000006';
+            const usdcAddr = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+            
+            // Check if we have a recent price in our matrix
+            const cacheKey = `UNISWAP_V3_${wethAddr}_${usdcAddr}`;
+            const cached = this.priceMatrix.get(cacheKey);
+            
+            if (cached && Date.now() - cached.timestamp < 30000) { // 30 second cache
+                this.ethPrice = cached.price;
+                return;
+            }
+            
+            // Fetch fresh price if not in cache
+            const freshPrice = await this.fetchQuantumPrice('UNISWAP_V3', wethAddr, usdcAddr);
+            if (freshPrice > 0) {
+                this.ethPrice = freshPrice;
+                this.priceMatrix.set(cacheKey, {
+                    price: freshPrice,
+                    timestamp: Date.now(),
+                    confidence: 0.95,
+                    source: 'live'
+                });
+            } else {
+                // Fallback to CoinGecko if DEX price not available
+                this.ethPrice = await this.fetchEthPriceFromCoinGecko();
+            }
+        } catch (error) {
+            tconsole.error('Failed to update ETH price:', error.message);
+            // Keep the previous price if update fails
+        }
+    }
+    
+    async fetchEthPriceFromCoinGecko() {
+        try {
+            const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
+            return response.data.ethereum.usd;
+        } catch (error) {
+            tconsole.error('Failed to fetch ETH price from CoinGecko:', error.message);
+            return 3600; // Fallback value
         }
     }
 
@@ -935,7 +984,7 @@ class QuantumArbitrageEngine extends EventEmitter {
             '║                 QUANTUM ARBITRAGE ENGINE v4.0               ║',
             '╠══════════════════════════════════════════════════════════════╣',
             `║ Status:    ${this.getStatusIndicator()}                                  ║`,
-            `║ ETH:       ${ethers.formatEther(this.walletBalance || 0).substring(0, 8)} ETH ($${(this.walletBalance * 3600 / 1e18).toFixed(2)})         ║`,
+            `║ ETH:       ${ethers.formatEther(this.walletBalance || 0).substring(0, 8)} ETH ($${(Number(ethers.formatEther(this.walletBalance || 0)) * this.ethPrice).toFixed(2)})         ║`,
             `║ Gas:       ${this.gasOracle.current.toFixed(1)} gwei (${this.gasOracle.trend})                      ║`,
             '╠══════════════════════════════════════════════════════════════╣',
             `║ Opportunities: ${this.opportunitiesCount}                               ║`,
