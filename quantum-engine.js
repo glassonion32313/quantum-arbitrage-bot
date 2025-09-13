@@ -291,7 +291,7 @@ class QuantumArbitrageEngine extends EventEmitter {
             // Implement retry logic here
         });
 
-        ws.on('close', (code, reason) => {
+        ws.on('close', (code, reason) {
             tconsole.log(`WebSocket closed on feed ${index}:`, code, reason.toString());
             // Reconnect after delay with exponential backoff
             setTimeout(() => this.connectQuantumFeed(endpoint, index), 5000);
@@ -969,12 +969,15 @@ class QuantumArbitrageEngine extends EventEmitter {
     }
 
     displayStatusDashboard() {
+        const ethBalance = ethers.formatEther(this.walletBalance || 0).substring(0, 8);
+        const ethValue = (Number(ethers.formatEther(this.walletBalance || 0)) * this.ethPrice).toFixed(2);
+        
         const statusLines = [
             '╔══════════════════════════════════════════════════════════════╗',
             '║                 QUANTUM ARBITRAGE ENGINE v4.0               ║',
             '╠══════════════════════════════════════════════════════════════╣',
-            `║ Status:    ${this.getStatusIndicator()}                                  ║',
-            `║ ETH:       ${ethers.formatEther(this.walletBalance || 0).substring(0, 8)} ETH ($${(Number(ethers.formatEther(this.walletBalance || 0)) * this.ethPrice).toFixed(2)})         ║`,
+            `║ Status:    ${this.getStatusIndicator()}                                  ║`,
+            `║ ETH:       ${ethBalance} ETH ($${ethValue})         ║`,
             `║ Gas:       ${this.gasOracle.current.toFixed(1)} gwei (${this.gasOracle.trend})                      ║`,
             '╠══════════════════════════════════════════════════════════════╣',
             `║ Opportunities: ${this.opportunitiesCount}                               ║`,
