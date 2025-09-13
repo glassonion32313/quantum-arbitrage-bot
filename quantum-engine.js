@@ -5,6 +5,8 @@ const { ethers } = require('ethers');
 const WebSocket = require('ws');
 const axios = require('axios');
 const EventEmitter = require('events');
+// Add this at the top of your file with the other imports
+const readline = require('readline');
 
 // Custom console with timestamps
 class TimestampConsole {
