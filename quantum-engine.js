@@ -239,8 +239,15 @@ class QuantumArbitrageEngine extends EventEmitter {
             }
         });
 
-        ws.on('close', () => {
-            setTimeout(() => this.connectQuantumFeed(endpoint, index), 1000);
+        ws.on('error', (error) => {
+            console.error(` WebSocket error on feed ${index}:`, error.message);
+            // Implement retry logic here
+        });
+
+        ws.on('close', (code, reason) => {
+            console.log(` WebSocket closed on feed ${index}:`, code, reason.toString());
+            // Reconnect after delay with exponential backoff
+            setTimeout(() => this.connectQuantumFeed(endpoint, index), 5000);
         });
     }
 
