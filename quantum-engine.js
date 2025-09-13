@@ -291,7 +291,7 @@ class QuantumArbitrageEngine extends EventEmitter {
             // Implement retry logic here
         });
 
-        ws.on('close', (code, reason) {
+        ws.on('close', (code, reason) => {
             tconsole.log(`WebSocket closed on feed ${index}:`, code, reason.toString());
             // Reconnect after delay with exponential backoff
             setTimeout(() => this.connectQuantumFeed(endpoint, index), 5000);
@@ -455,6 +455,12 @@ class QuantumArbitrageEngine extends EventEmitter {
     }
 
     async scanQuantumArbitrage(tokenA, tokenB) {
+        // Add validation for token addresses
+        if (!tokenA || !tokenB) {
+            tconsole.error('Invalid token pair: tokenA or tokenB is undefined');
+            return;
+        }
+        
         this.isScanning = true;
         
         try {
@@ -871,6 +877,8 @@ class QuantumArbitrageEngine extends EventEmitter {
     }
 
     getTokenSymbol(address) {
+        // Fix: Add null check before calling toLowerCase()
+        if (!address) return null;
         for (const [symbol, token] of this.tokens) {
             if (token.addr.toLowerCase() === address.toLowerCase()) {
                 return symbol;
