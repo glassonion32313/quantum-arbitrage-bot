@@ -18,13 +18,6 @@ class TimestampConsole {
     const timestamp = new Date().toISOString();
     console.error(`[${timestamp}] ERROR:`, ...args);
   }
-  
-  debug(...args) {
-    if (process.env.DEBUG_MODE === 'true') {
-      const timestamp = new Date().toISOString();
-      console.log(`[${timestamp}] DEBUG:`, ...args);
-    }
-  }
 }
 
 const tconsole = new TimestampConsole();
@@ -37,17 +30,16 @@ class QuantumArbitrageEngine extends EventEmitter {
             privateKey: process.env.PRIVATE_KEY,
             contractAddress: process.env.CONTRACT_ADDRESS,
             alchemyApiKey: process.env.ALCHEMY_API_KEY,
-            minProfitUSD: parseFloat(process.env.MIN_PROFIT_USD) || 0.50, // Lowered to $0.50
+            minProfitUSD: parseFloat(process.env.MIN_PROFIT_USD) || 15,
             maxPositionUSD: parseFloat(process.env.MAX_POSITION_USD) || 100000,
-            scanInterval: parseInt(process.env.SCAN_INTERVAL) || 30, // Faster scanning
-            mevProtection: process.env.MEV_PROTECTION !== 'false',
-            sandwichDetection: process.env.SANDWICH_DETECTION !== 'false',
-            frontrunProtection: process.env.FRONTRUN_PROTECTION !== 'false',
-            maxSlippage: parseFloat(process.env.MAX_SLIPPAGE) || 0.001,
-            maxGasPriceGwei: parseFloat(process.env.MAX_GAS_PRICE) || 5, // Lowered max gas
+            scanInterval: 50,
+            mevProtection: true,
+            sandwichDetection: true,
+            frontrunProtection: true,
+            maxSlippage: 0.0005,
+            maxGasPriceGwei: 30,
             // Balancer V2 Vault Address (Mainnet)
-            balancerVault: process.env.BALANCER_VAULT || '0xBA12222222228d8Ba445958a75a0704d566BF2C8',
-            debugMode: process.env.DEBUG_MODE === 'true'
+            balancerVault: process.env.BALANCER_VAULT || '0xBA12222222228d8Ba445958a75a0704d566BF2C8'
         };
 
         // Multi-provider setup
@@ -68,8 +60,7 @@ class QuantumArbitrageEngine extends EventEmitter {
             ['AERO', { addr: '0x940181a94A35A4569E4529A3CDfB74e38FD98631', decimals: 18, tier: 2, avgLiquidity: 15000000 }],
             ['CBETH', { addr: '0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22', decimals: 18, tier: 2, avgLiquidity: 25000000 }],
             ['PRIME', { addr: '0xfA980cEd6895AC314E7dE34Ef1bFAE90a5AdD21b', decimals: 18, tier: 3, avgLiquidity: 5000000 }],
-            ['DEGEN', { addr: '0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed', decimals: 18, tier: 3, avgLiquidity: 8000000 }],
-            ['BAL', { addr: '0x4158734D47Fc9692176B5085E0F52ee0Da5d47F1', decimals: 18, tier: 3, avgLiquidity: 3000000 }]
+            ['DEGEN', { addr: '0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed', decimals: 18, tier: 3, avgLiquidity: 8000000 }]
         ]);
 
         // Neural DEX routing
@@ -99,11 +90,6 @@ class QuantumArbitrageEngine extends EventEmitter {
                 router: '0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb',
                 factory: '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865',
                 gasBase: 155000, priority: 5 
-            }],
-            ['KYBERSWAP', {
-                router: '0x6131B5fae19EA4f9D964eAc0408E4408b66337b5',
-                factory: '0x5F1dddbf348aC2fbe22a163e30F99F9ECE3DD50a',
-                gasBase: 145000, priority: 6
             }]
         ]);
 
@@ -119,16 +105,12 @@ class QuantumArbitrageEngine extends EventEmitter {
             this.wallet
         );
 
-        // Expanded Quantum trading pairs
+        // Quantum trading pairs
         this.quantumPairs = [
             { a: this.tokens.get('WETH').addr, b: this.tokens.get('USDC').addr, volume24h: 50000000, priority: 1 },
             { a: this.tokens.get('USDC').addr, b: this.tokens.get('USDT').addr, volume24h: 100000000, priority: 2 },
             { a: this.tokens.get('WETH').addr, b: this.tokens.get('DAI').addr, volume24h: 20000000, priority: 3 },
-            { a: this.tokens.get('CBETH').addr, b: this.tokens.get('WETH').addr, volume24h: 15000000, priority: 4 },
-            { a: this.tokens.get('AERO').addr, b: this.tokens.get('WETH').addr, volume24h: 8000000, priority: 5 },
-            { a: this.tokens.get('DEGEN').addr, b: this.tokens.get('WETH').addr, volume24h: 5000000, priority: 6 },
-            { a: this.tokens.get('PRIME').addr, b: this.tokens.get('USDC').addr, volume24h: 3000000, priority: 7 },
-            { a: this.tokens.get('DEGEN').addr, b: this.tokens.get('USDC').addr, volume24h: 2000000, priority: 8 }
+            { a: this.tokens.get('CBETH').addr, b: this.tokens.get('WETH').addr, volume24h: 15000000, priority: 4 }
         ];
 
         // Neural network state
@@ -137,7 +119,7 @@ class QuantumArbitrageEngine extends EventEmitter {
         this.volatilityIndex = new Map();
         this.executionVector = [];
         this.mempoolAnalyzer = new Map();
-        this.gasOracle = { current: 0.1, trend: 'stable', optimal: 0.2 }; // Base network defaults
+        this.gasOracle = { current: 2, trend: 'stable', optimal: 3 };
         this.profitEngine = { total: 0, trades: 0, winRate: 0.85, sharpe: 0 };
 
         // Quantum execution engine
@@ -155,12 +137,7 @@ class QuantumArbitrageEngine extends EventEmitter {
         this.totalProfit = 0;
         this.walletBalance = 0;
         this.activityLog = [];
-        this.ethPrice = 3600;
-        this.lastOpportunityTime = 0;
-        this.marketHealth = 0.8;
-        this.opportunitiesLastHour = 0;
-        this.averageSpread = 0;
-        this.successRate = 0.85;
+        this.ethPrice = 3600; // Will be updated dynamically
 
         // Advanced contract interfaces
         this.flashloanContract = new ethers.Contract(
@@ -184,9 +161,6 @@ class QuantumArbitrageEngine extends EventEmitter {
         tconsole.log('Quantum Arbitrage Engine v4.0 - Neural Networks Online');
         tconsole.log(`Ultra-High Frequency Trading Mode: ${this.config.scanInterval}ms`);
         tconsole.log('Balancer Flash Loans: Zero Fee Mode Enabled');
-        if (this.config.debugMode) {
-            tconsole.log('Debug Mode: Enabled - Detailed logging active');
-        }
     }
 
     async initializeQuantumSystems() {
@@ -214,49 +188,6 @@ class QuantumArbitrageEngine extends EventEmitter {
         this.setupInteractiveConsole();
 
         tconsole.log('Quantum systems operational - Alpha extraction commenced');
-        
-        // Run initial diagnostics
-        await this.runDiagnostics();
-    }
-
-    async runDiagnostics() {
-        tconsole.log("=== ARBITRAGE DIAGNOSTICS ===");
-        
-        // Check connectivity
-        try {
-            const blockNumber = await this.provider.getBlockNumber();
-            tconsole.log(`✓ Current block: ${blockNumber}`);
-        } catch (error) {
-            tconsole.error(`✗ Block number fetch failed: ${error.message}`);
-        }
-        
-        // Check wallet balance
-        tconsole.log(`✓ Wallet balance: ${ethers.formatEther(this.walletBalance)} ETH`);
-        
-        // Test price feeds
-        tconsole.log("Testing price feeds...");
-        for (const [dexName, dex] of this.dexRouters) {
-            if (dex.quoter) {
-                try {
-                    const price = await this.fetchQuantumPrice(dexName, 
-                        this.tokens.get('WETH').addr, 
-                        this.tokens.get('USDC').addr);
-                    tconsole.log(`✓ ${dexName} WETH/USDC: ${price !== 0 ? price.toFixed(4) : 'N/A'}`);
-                } catch (error) {
-                    tconsole.error(`✗ ${dexName} price fetch failed: ${error.message}`);
-                }
-            }
-        }
-        
-        // Check gas prices
-        try {
-            await this.updateGasOracle();
-            tconsole.log(`✓ Current gas price: ${this.gasOracle.current.toFixed(2)} gwei`);
-        } catch (error) {
-            tconsole.error(`✗ Gas price fetch failed: ${error.message}`);
-        }
-        
-        tconsole.log("=== DIAGNOSTICS COMPLETE ===");
     }
 
     async initializeNeuralPricingEngine() {
@@ -388,7 +319,7 @@ class QuantumArbitrageEngine extends EventEmitter {
             id: 100,
             method: 'eth_subscribe',
             params: ['newPendingTransactions']
-        });
+        }));
 
         // Subscribe to new blocks
         ws.send(JSON.stringify({
@@ -517,7 +448,7 @@ class QuantumArbitrageEngine extends EventEmitter {
     }
 
     async quantumArbitrageScan() {
-        const scanPromises = this.quantumPairs.slice(0, 8).map(pair =>
+        const scanPromises = this.quantumPairs.slice(0, 4).map(pair =>
             this.scanQuantumArbitrage(pair.a, pair.b)
         );
 
@@ -531,37 +462,20 @@ class QuantumArbitrageEngine extends EventEmitter {
             const tokenASymbol = this.getTokenSymbol(tokenA) || tokenA.substring(0, 8);
             const tokenBSymbol = this.getTokenSymbol(tokenB) || tokenB.substring(0, 8);
             
-            tconsole.debug(`Scanning pair: ${tokenASymbol}/${tokenBSymbol}`);
+            tconsole.log(`Scanning pair: ${tokenASymbol}/${tokenBSymbol}`);
             
             const priceVector = await this.aggregateQuantumPrices(tokenA, tokenB);
 
-            if (priceVector.length < 2) {
-                tconsole.debug(`Insufficient price data for ${tokenASymbol}/${tokenBSymbol}`);
-                return;
-            }
+            if (priceVector.length < 2) return;
 
             const opportunity = this.detectQuantumArbitrage(priceVector, tokenA, tokenB);
 
-            if (opportunity) {
-                if (this.config.debugMode) {
-                    tconsole.debug(`Potential opportunity: ${tokenASymbol}/${tokenBSymbol}`);
-                    tconsole.debug(`Spread: ${opportunity.profitPercent.toFixed(4)}%`);
-                    tconsole.debug(`Net profit: $${opportunity.netProfit.toFixed(2)}`);
-                    tconsole.debug(`Confidence: ${(opportunity.confidence * 100).toFixed(1)}%`);
-                }
+            if (opportunity && opportunity.netProfit >= this.config.minProfitUSD) {
+                this.opportunitiesCount++;
+                this.activityLog.push(`Found opportunity: $${opportunity.netProfit.toFixed(2)} profit`.padEnd(50));
                 
-                if (opportunity.netProfit >= this.config.minProfitUSD) {
-                    this.opportunitiesCount++;
-                    this.lastOpportunityTime = Date.now();
-                    this.activityLog.push(`Found opportunity: $${opportunity.netProfit.toFixed(2)} profit`.padEnd(50));
-                    
-                    tconsole.log(`Arbitrage opportunity found: $${opportunity.netProfit.toFixed(2)} profit on ${tokenASymbol}/${tokenBSymbol}`);
-                    await this.executeQuantumArbitrage(opportunity);
-                } else if (this.config.debugMode) {
-                    tconsole.debug(`Opportunity below threshold: $${opportunity.netProfit.toFixed(2)} < $${this.config.minProfitUSD}`);
-                }
-            } else if (this.config.debugMode) {
-                tconsole.debug(`No arbitrage opportunity for ${tokenASymbol}/${tokenBSymbol}`);
+                tconsole.log(`Arbitrage opportunity found: $${opportunity.netProfit.toFixed(2)} profit`);
+                await this.executeQuantumArbitrage(opportunity);
             }
 
         } catch (error) {
@@ -634,10 +548,8 @@ class QuantumArbitrageEngine extends EventEmitter {
                 return parseFloat(ethers.formatUnits(quote, tokenBInfo.decimals));
             }
 
-            // Add other DEX implementations as needed
             return 0;
         } catch (error) {
-            tconsole.debug(`Price fetch error for ${dexName}: ${error.message}`);
             return 0;
         }
     }
@@ -655,9 +567,6 @@ class QuantumArbitrageEngine extends EventEmitter {
         const spread = sellDex.price - buyDex.price;
         const profitPercent = (spread / buyDex.price) * 100;
 
-        // Skip if spread is too small
-        if (profitPercent < 0.05) return null;
-
         const totalGas = buyDex.gasEstimate + sellDex.gasEstimate + 120000;
         const gasCostUSD = (totalGas * this.gasOracle.current * this.ethPrice) / 1e9;
 
@@ -669,8 +578,7 @@ class QuantumArbitrageEngine extends EventEmitter {
 
         const confidence = this.calculateConfidenceScore(priceVector, volatility, optimalSize);
 
-        // Lowered confidence threshold to 0.5
-        if (netProfit >= this.config.minProfitUSD && profitPercent > 0.05 && confidence > 0.5) {
+        if (netProfit >= this.config.minProfitUSD && profitPercent > 0.15 && confidence > 0.7) {
             return {
                 tokenA, tokenB, buyDex: buyDex.dex, sellDex: sellDex.dex,
                 buyPrice: buyDex.price, sellPrice: sellDex.price,
@@ -904,22 +812,17 @@ class QuantumArbitrageEngine extends EventEmitter {
     }
 
     async calculateQuantumGasPrice(opportunity) {
-        // Get current gas data
-        const feeData = await this.provider.getFeeData();
-        let currentGas = feeData.gasPrice;
-        
-        // For very low gas environments, use minimal markup
-        const currentGasGwei = parseFloat(ethers.formatUnits(currentGas, 'gwei'));
-        
-        if (currentGasGwei < 1) {
-            // In ultra-low gas environments, just add minimal premium
-            return currentGas * 110n / 100n; // Just 10% premium
-        } else {
-            // Use normal strategy for higher gas environments
-            const profitMultiplier = Math.min(2.0, opportunity.netProfit / 25);
-            const optimalGas = currentGas * BigInt(Math.floor(profitMultiplier * 100)) / 100n;
-            return optimalGas;
-        }
+        const baseFee = await this.provider.getFeeData();
+        const currentGas = baseFee.gasPrice || ethers.parseUnits('2', 'gwei');
+
+        const profitMultiplier = Math.min(2.0, opportunity.netProfit / 25);
+        const confidenceMultiplier = opportunity.confidence > 0.8 ? 1.3 : 1.1;
+        const urgencyMultiplier = 1.2;
+
+        const optimalGas = currentGas * BigInt(Math.floor(profitMultiplier * confidenceMultiplier * urgencyMultiplier * 100)) / BigInt(100);
+        const maxGas = ethers.parseUnits(this.config.maxGasPriceGwei.toString(), 'gwei');
+
+        return optimalGas > maxGas ? maxGas : optimalGas;
     }
 
     async getOptimalNonce() {
@@ -970,22 +873,11 @@ class QuantumArbitrageEngine extends EventEmitter {
 
         const profitable = this.executionVector.filter(e => e.profitable).length;
         this.profitEngine.winRate = profitable / this.executionVector.length;
-        this.successRate = this.profitEngine.winRate;
 
         const returns = this.executionVector.map(e => e.actualProfit || 0);
         const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
         const variance = returns.reduce((acc, r) => acc + Math.pow(r - avgReturn, 2), 0) / returns.length;
         this.profitEngine.sharpe = variance > 0 ? avgReturn / Math.sqrt(variance) : 0;
-        
-        // Update average spread
-        if (execution.opportunity) {
-            const spreads = this.executionVector
-                .filter(e => e.opportunity)
-                .map(e => e.opportunity.profitPercent);
-            if (spreads.length > 0) {
-                this.averageSpread = spreads.reduce((a, b) => a + b, 0) / spreads.length;
-            }
-        }
     }
 
     getTokenSymbol(address) {
@@ -1014,40 +906,19 @@ class QuantumArbitrageEngine extends EventEmitter {
     async updateGasOracle() {
         try {
             const feeData = await this.provider.getFeeData();
-            
-            // Try secondary method if primary fails
-            let gasPrice = feeData.gasPrice;
-            if (!gasPrice || gasPrice === 0n) {
-                const block = await this.provider.getBlock('latest');
-                if (block && block.baseFeePerGas) {
-                    gasPrice = block.baseFeePerGas * 2n;
-                }
+            if (feeData.gasPrice) {
+                const newGas = parseFloat(ethers.formatUnits(feeData.gasPrice, 'gwei'));
+                this.gasOracle.trend = newGas > this.gasOracle.current ? 'rising' : 'falling';
+                this.gasOracle.current = newGas;
+                this.gasOracle.optimal = newGas * 1.1;
             }
             
-            // Try tertiary method if still failing
-            if (!gasPrice || gasPrice === 0n) {
-                gasPrice = await this.fetchGasFromAlternativeRPC();
-            }
+            this.walletBalance = await this.provider.getBalance(this.wallet.address);
             
-            const newGas = parseFloat(ethers.formatUnits(gasPrice, 'gwei'));
-            this.gasOracle.current = Math.max(0.1, newGas); // Ensure minimum 0.1 gwei
-            this.gasOracle.trend = 'stable';
-            
+            // Update ETH price
+            await this.updateEthPrice();
         } catch (error) {
-            // Realistic fallback for Base network
-            this.gasOracle.current = 0.1; // Base network typical low fee
-            this.gasOracle.trend = 'stable';
-        }
-    }
-    
-    async fetchGasFromAlternativeRPC() {
-        try {
-            // Use a different RPC endpoint for gas price data
-            const altProvider = new ethers.JsonRpcProvider('https://base-mainnet.g.alchemy.com/v2/demo');
-            const feeData = await altProvider.getFeeData();
-            return feeData.gasPrice || ethers.parseUnits('0.1', 'gwei');
-        } catch {
-            return ethers.parseUnits('0.1', 'gwei'); // Base network typical
+            tconsole.error('Error updating gas oracle:', error.message);
         }
     }
     
@@ -1095,17 +966,6 @@ class QuantumArbitrageEngine extends EventEmitter {
             return 3600; // Fallback value
         }
     }
-    
-    calculateMarketHealth() {
-        // Simple market health calculation based on recent activity
-        const hoursSinceLastOpportunity = (Date.now() - this.lastOpportunityTime) / (1000 * 60 * 60);
-        const healthScore = Math.max(0, 1 - (hoursSinceLastOpportunity / 6)); // Decays over 6 hours
-        
-        if (healthScore > 0.7) return 'Excellent ✅';
-        if (healthScore > 0.4) return 'Good 👍';
-        if (healthScore > 0.2) return 'Fair ⚠️';
-        return 'Poor ❌';
-    }
 
     setupInteractiveConsole() {
         process.stdout.write('\x1Bc');
@@ -1125,15 +985,11 @@ class QuantumArbitrageEngine extends EventEmitter {
             '╠══════════════════════════════════════════════════════════════╣',
             `║ Status:    ${this.getStatusIndicator()}                                  ║`,
             `║ ETH:       ${ethers.formatEther(this.walletBalance || 0).substring(0, 8)} ETH ($${(Number(ethers.formatEther(this.walletBalance || 0)) * this.ethPrice).toFixed(2)})         ║`,
-            `║ Gas:       ${this.gasOracle.current.toFixed(2)} gwei (${this.gasOracle.trend})                      ║`,
+            `║ Gas:       ${this.gasOracle.current.toFixed(1)} gwei (${this.gasOracle.trend})                      ║`,
             '╠══════════════════════════════════════════════════════════════╣',
             `║ Opportunities: ${this.opportunitiesCount}                               ║`,
             `║ Executions:    ${this.executionCount} (${this.successCount} successful)              ║`,
             `║ Total Profit:  $${this.totalProfit.toFixed(2)}                            ║`,
-            '╠══════════════════════════════════════════════════════════════╣',
-            `║ Market Health:  ${this.calculateMarketHealth()}                      ║`,
-            `║ Avg Spread:    ${this.averageSpread.toFixed(3)}%                    ║`,
-            `║ Success Rate:  ${(this.successRate * 100).toFixed(1)}%              ║`,
             '╠══════════════════════════════════════════════════════════════╣',
             '║                      RECENT ACTIVITY                         ║',
             '╠══════════════════════════════════════════════════════════════╣',
@@ -1144,12 +1000,12 @@ class QuantumArbitrageEngine extends EventEmitter {
             statusLines.push(`║ ${activity} ║`);
         }
         
-        while (statusLines.length < 22) {
+        while (statusLines.length < 20) {
             statusLines.push('║                                              ║');
         }
         
         statusLines.push('╚══════════════════════════════════════════════════════════════╝');
-        statusLines.push('Press Ctrl+C to exit | DEBUG_MODE=' + (this.config.debugMode ? 'ON' : 'OFF'));
+        statusLines.push('Press Ctrl+C to exit');
         
         process.stdout.write(statusLines.join('\n'));
     }
@@ -1180,7 +1036,9 @@ class QuantumArbitrageEngine extends EventEmitter {
         const balance = await this.provider.getBalance(this.wallet.address);
         tconsole.log(`Quantum wallet: ${ethers.formatEther(balance)} ETH`);
 
-        // Removed the low ETH warning - your balance is sufficient
+        if (balance < ethers.parseEther('0.02')) {
+            tconsole.log('Low ETH - quantum operations may be limited');
+        }
     }
 
     startMEVMonitoring() {
@@ -1189,11 +1047,7 @@ class QuantumArbitrageEngine extends EventEmitter {
 
     startProfitOptimization() {
         setInterval(() => {
-            // Update opportunities per hour
-            const hourInMs = 60 * 60 * 1000;
-            this.opportunitiesLastHour = this.executionVector.filter(
-                e => e.timestamp > Date.now() - hourInMs
-            ).length;
+            // Displayed in interactive console
         }, 60000);
     }
 }
@@ -1206,7 +1060,7 @@ async function main() {
         const engine = new QuantumArbitrageEngine();
         await engine.initializeQuantumSystems();
 
-        process.on('SIGINT', () {
+        process.on('SIGINT', () => {
             if (engine.statusInterval) {
                 clearInterval(engine.statusInterval);
             }
