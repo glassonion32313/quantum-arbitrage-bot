@@ -12,8 +12,7 @@ class TimestampConsole {
     const timestamp = new Date().toISOString();
     console.log(`[${timestamp}]`, ...args);
   }
-  
-  error(...args) {
+    error(...args) {
     const timestamp = new Date().toISOString();
     console.error(`[${timestamp}] ERROR:`, ...args);
   }
@@ -937,7 +936,7 @@ class QuantumArbitrageEngine extends EventEmitter {
             `║ ETH:       ${ethers.formatEther(this.walletBalance || 0).substring(0, 8)} ETH ($${(this.walletBalance * 3600 / 1e18).toFixed(2)})         ║`,
             `║ Gas:       ${this.gasOracle.current.toFixed(1)} gwei (${this.gasOracle.trend})                      ║`,
             '╠══════════════════════════════════════════════════════════════╣',
-            `║ Opportunities: ${this.opportunitiesCount}                               ║',
+            `║ Opportunities: ${this.opportunitiesCount}                               ║`,
             `║ Executions:    ${this.executionCount} (${this.successCount} successful)              ║`,
             `║ Total Profit:  $${this.totalProfit.toFixed(2)}                            ║`,
             '╠══════════════════════════════════════════════════════════════╣',
